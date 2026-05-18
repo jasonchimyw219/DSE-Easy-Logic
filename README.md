@@ -1,4 +1,4 @@
-# Easy Logic 易邏輯
+# Easy Logic 簡易邏輯
 
 A **free** web platform that helps Hong Kong DSE students practise the logical
 deduction chain (因 → 果) used in one-sided argumentative essays.
