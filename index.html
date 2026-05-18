@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Easy Logic — DSE Argumentative Writing Practice</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <h1 class="site-title">Easy Logic <span class="subtitle">易邏輯</span></h1>
+      <p class="tagline">Master the 因 → 果 chain for DSE one-sided argumentative essays</p>
+    </div>
+  </header>
+
+  <!-- Step progress indicator -->
+  <nav class="steps-nav container" aria-label="Progress">
+    <ol class="steps">
+      <li class="step active" data-step="1"><span class="num">1</span><span class="label">Question</span></li>
+      <li class="step" data-step="2"><span class="num">2</span><span class="label">Build Chain</span></li>
+      <li class="step" data-step="3"><span class="num">3</span><span class="label">AI Check</span></li>
+      <li class="step" data-step="4"><span class="num">4</span><span class="label">Samples</span></li>
+    </ol>
+  </nav>
+
+  <main class="container">
+
+    <!-- ============== STEP 1 ============== -->
+    <section id="step-1" class="step-panel active">
+      <h2>Step I — Generate a Question</h2>
+      <p class="muted">Pick an axis and a stance. We'll generate a DSE-style argumentative prompt.</p>
+
+      <div class="form-row">
+        <label class="form-label">Axis 範疇</label>
+        <div class="chip-group" role="radiogroup" id="axis-group">
+          <button type="button" class="chip" data-value="Education &amp; School Policy">Education &amp; School Policy</button>
+          <button type="button" class="chip" data-value="Urban Development">Urban Development</button>
+          <button type="button" class="chip" data-value="Technology &amp; Society">Technology &amp; Society</button>
+          <button type="button" class="chip" data-value="Public Health &amp; Safety">Public Health &amp; Safety</button>
+          <button type="button" class="chip" data-value="Economic &amp; Employment Issues">Economic &amp; Employment Issues</button>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label">Stance 立場</label>
+        <div class="chip-group" role="radiogroup" id="stance-group">
+          <button type="button" class="chip" data-value="pro">PRO — Argue in favour</button>
+          <button type="button" class="chip" data-value="con">CON — Argue against</button>
+        </div>
+      </div>
+
+      <button id="btn-generate-question" class="btn primary" disabled>Generate Question</button>
+
+      <div id="question-output" class="card hidden">
+        <div class="card-label">Generated Question</div>
+        <div class="cause-block">
+          <h3>Cause (因)</h3>
+          <p id="q-cause"></p>
+        </div>
+        <div class="task-block">
+          <h3>Your Task</h3>
+          <p id="q-task"></p>
+        </div>
+        <div class="result-block">
+          <h3>Final Result (果)</h3>
+          <p id="q-final-result"></p>
+        </div>
+        <button id="btn-to-step-2" class="btn primary">Continue to Build Chain →</button>
+      </div>
+    </section>
+
+    <!-- ============== STEP 2 ============== -->
+    <section id="step-2" class="step-panel">
+      <h2>Step II — Build the Logic Chain</h2>
+      <p class="muted">
+        Fill in each step in English. Tap <strong>Hint 提示</strong> for a 繁體中文 prompt — your job is to translate it.
+      </p>
+
+      <div id="chain-container" class="chain"></div>
+
+      <button id="btn-check-logic" class="btn primary">Check My Logic →</button>
+    </section>
+
+    <!-- ============== STEP 3 ============== -->
+    <section id="step-3" class="step-panel">
+      <h2>Step III — AI Feedback</h2>
+
+      <div id="feedback-loading" class="loading hidden">
+        <div class="spinner"></div>
+        <p>Checking your chain…</p>
+      </div>
+
+      <div id="feedback-output" class="hidden">
+        <div class="feedback-card">
+          <h3>1. Logic Check 邏輯檢查</h3>
+          <div id="fb-logic" class="feedback-body"></div>
+        </div>
+        <div class="feedback-card">
+          <h3>2. Language &amp; Grammar 語言修正</h3>
+          <div id="fb-language" class="feedback-body"></div>
+        </div>
+        <div class="feedback-card">
+          <h3>3. Improved Topic Sentence 主題句</h3>
+          <div id="fb-topic" class="feedback-body"></div>
+        </div>
+        <button id="btn-to-step-4" class="btn primary">See Model Answers →</button>
+      </div>
+    </section>
+
+    <!-- ============== STEP 4 ============== -->
+    <section id="step-4" class="step-panel">
+      <h2>Step IV — Model Answers</h2>
+
+      <div id="samples-loading" class="loading hidden">
+        <div class="spinner"></div>
+        <p>Generating Lv3 and Lv5** samples…</p>
+      </div>
+
+      <div id="samples-output" class="hidden">
+        <details class="sample-card lv3" open>
+          <summary>
+            <span class="badge badge-lv3">Lv 3</span>
+            <span>Competent answer (click to toggle)</span>
+          </summary>
+          <div class="sample-body">
+            <div id="sample-lv3"></div>
+            <button class="btn ghost copy-btn" data-target="sample-lv3">Copy</button>
+          </div>
+        </details>
+
+        <details class="sample-card lv5" open>
+          <summary>
+            <span class="badge badge-lv5">Lv 5**</span>
+            <span>High-scoring answer (click to toggle)</span>
+          </summary>
+          <div class="sample-body">
+            <div id="sample-lv5"></div>
+            <button class="btn ghost copy-btn" data-target="sample-lv5">Copy</button>
+          </div>
+        </details>
+
+        <button id="btn-restart" class="btn secondary">Practise another question ↻</button>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>Easy Logic · Free for DSE students · Powered by Cloudflare Workers AI</p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

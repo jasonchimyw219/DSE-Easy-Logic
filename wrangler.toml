@@ -1,0 +1,15 @@
+name = "easy-logic-worker"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+
+# Required: enable the Workers AI binding so `env.AI.run(...)` works.
+[ai]
+binding = "AI"
+
+# Optional — tighten/loosen CPU limits if your free-tier account allows it.
+# [limits]
+# cpu_ms = 50
+
+# You do NOT need to set `account_id` here if you have run `wrangler login`
+# and only have one Cloudflare account. Otherwise uncomment and set:
+# account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
