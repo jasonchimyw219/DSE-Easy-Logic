@@ -15,6 +15,7 @@ const state = {
   question: null,
   chain: [],
   hints: [],          // hints shown so far (parallel to chain)
+  plannedHints: [],   // cached coherent chain from /plan-chain (length = CHAIN_LENGTH-2)
   feedback: null,
   samples: null,
 };
@@ -94,6 +95,7 @@ function buildChainUI() {
   const total = CHAIN_LENGTH;
   state.chain = new Array(total).fill("");
   state.hints = new Array(total).fill(null);
+  state.plannedHints = [];   // fresh question → re-plan on next hint click
   state.chain[0] = q.cause;
   state.chain[total - 1] = q.final_result;
 
@@ -151,21 +153,48 @@ function buildChainUI() {
 async function requestHint(idx, btn, bubble) {
   btn.disabled = true; btn.textContent = "Loading…";
   try {
-    const priorContext = [];
-    for (let i = 1; i < idx; i++) {
-      const typed = (state.chain[i] || "").trim();
-      if (typed) priorContext.push(typed);
-      else if (state.hints[i]) priorContext.push(state.hints[i]);
+    // FIRST hint click for this question: plan the ENTIRE chain in one AI
+    // call so every step is part of one coherent causal bridge. Then cache.
+    if (!state.plannedHints || state.plannedHints.length === 0) {
+      try {
+        const res = await api("/plan-chain", {
+          cause: state.question.cause,
+          final_result: state.question.final_result,
+          total_steps: CHAIN_LENGTH,
+        });
+        state.plannedHints = Array.isArray(res.hints) ? res.hints : [];
+      } catch (e) {
+        state.plannedHints = [];
+      }
     }
-    const res = await api("/get-hint", {
-      cause: state.question.cause,
-      final_result: state.question.final_result,
-      step_number: idx + 1,
-      total_steps: CHAIN_LENGTH,
-      previous_steps: priorContext,
-    });
-    state.hints[idx] = res.hint;
-    bubble.textContent = res.hint;
+
+    // hints[0] = step 2, hints[1] = step 3, hints[2] = step 4 (for CHAIN_LENGTH=5)
+    let hint = state.plannedHints[idx - 1];
+
+    // Fallback: per-step call if the planner didn't fill this slot
+    if (!hint) {
+      const priorContext = [];
+      for (let i = 1; i < idx; i++) {
+        const typed = (state.chain[i] || "").trim();
+        if (typed) priorContext.push(typed);
+        else if (state.hints[i]) priorContext.push(state.hints[i]);
+      }
+      const res = await api("/get-hint", {
+        cause: state.question.cause,
+        final_result: state.question.final_result,
+        step_number: idx + 1,
+        total_steps: CHAIN_LENGTH,
+        previous_steps: priorContext,
+      });
+      hint = res.hint;
+    }
+
+    if (hint) {
+      state.hints[idx] = hint;
+      bubble.textContent = hint;
+    } else {
+      bubble.textContent = "（無法生成提示，請重試）";
+    }
     bubble.classList.add("visible");
   } catch (err) {
     bubble.textContent = "（提示載入失敗，請稍後再試）";
@@ -345,7 +374,7 @@ document.addEventListener("click", (e) => {
 /* ---------- Restart ---------- */
 $("#btn-restart").addEventListener("click", () => {
   state.question = null;
-  state.chain = []; state.hints = [];
+  state.chain = []; state.hints = []; state.plannedHints = [];
   state.feedback = null; state.samples = null;
   $("#question-output").classList.add("hidden");
   $$("#axis-group .chip, #stance-group .chip").forEach((c) => c.classList.remove("selected"));
