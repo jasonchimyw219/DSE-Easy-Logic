@@ -95,6 +95,18 @@ html, body {
 .muted { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
 .small { font-size: 13px; }
 
+.quota-display {
+  display: inline-block;
+  font-size: 13px;
+  color: var(--navy-700);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  padding: 6px 12px;
+  border-radius: 18px;
+  margin: 0 0 12px;
+}
+.quota-display strong { color: var(--navy); }
+
 /* ---------- Form / Chips ---------- */
 .form-row { margin-bottom: 18px; }
 .form-label {

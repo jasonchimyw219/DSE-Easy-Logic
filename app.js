@@ -7,6 +7,38 @@ const WORKER_URL = (window.WORKER_URL || "https://easy-logic-worker.jasonchimyw.
   .replace(/\/+$/, "");
 
 const CHAIN_LENGTH = 5;
+const DAILY_LIMIT = 3;
+
+/* ---------- Daily quota (localStorage, per device) ---------- */
+function quotaKey() {
+  const d = new Date();
+  return `el-quota-${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+function getQuotaUsed() {
+  try { return parseInt(localStorage.getItem(quotaKey()) || "0", 10) || 0; }
+  catch { return 0; }
+}
+function getQuotaRemaining() { return Math.max(0, DAILY_LIMIT - getQuotaUsed()); }
+function consumeQuota() {
+  try {
+    const k = quotaKey();
+    localStorage.setItem(k, String(getQuotaUsed() + 1));
+    // sweep yesterday's keys
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith("el-quota-") && key !== k) localStorage.removeItem(key);
+    }
+  } catch {}
+}
+function updateQuotaDisplay() {
+  const el = document.getElementById("quota-remaining");
+  if (el) el.textContent = String(getQuotaRemaining());
+  const btn = document.getElementById("btn-generate-question");
+  if (btn && getQuotaRemaining() === 0) {
+    btn.disabled = true;
+    btn.textContent = "Daily limit reached · 今日次數已用盡";
+  }
+}
 
 /* ---------- State ---------- */
 const state = {
@@ -16,6 +48,7 @@ const state = {
   chain: [],
   hints: [],          // hints shown so far (parallel to chain)
   plannedHints: [],   // cached coherent chain from /plan-chain (length = CHAIN_LENGTH-2)
+  planInFlight: null, // in-flight /plan-chain promise (race-condition guard)
   feedback: null,
   samples: null,
 };
@@ -52,13 +85,29 @@ wireChipGroup("axis-group", (v) => { state.axis = v; refreshGenerateButton(); })
 wireChipGroup("stance-group", (v) => { state.stance = v; refreshGenerateButton(); });
 
 function refreshGenerateButton() {
-  $("#btn-generate-question").disabled = !(state.axis && state.stance);
+  const btn = $("#btn-generate-question");
+  if (getQuotaRemaining() === 0) {
+    btn.disabled = true;
+    btn.textContent = "Daily limit reached · 今日次數已用盡";
+    return;
+  }
+  btn.disabled = !(state.axis && state.stance);
 }
+
+/* Initialise quota display on load */
+updateQuotaDisplay();
 
 /* ------------------------------------------------------------------
  * Step 1 — Generate Question
  * ------------------------------------------------------------------ */
 $("#btn-generate-question").addEventListener("click", async () => {
+  // Daily quota check (each device gets DAILY_LIMIT generations per day)
+  if (getQuotaRemaining() <= 0) {
+    alert(`您今日的免費試用次數已用盡（每日 ${DAILY_LIMIT} 次）。請明天再試。\n\nYou've used today's free quota (${DAILY_LIMIT}/day). Please try again tomorrow.`);
+    updateQuotaDisplay();
+    return;
+  }
+
   const btn = $("#btn-generate-question");
   btn.disabled = true;
   btn.textContent = "Generating…";
@@ -67,6 +116,8 @@ $("#btn-generate-question").addEventListener("click", async () => {
       axis: state.axis, stance: state.stance,
     });
     state.question = res;
+    consumeQuota();              // ← only count successful generations
+    updateQuotaDisplay();
     $("#q-cause").textContent = res.cause;
     $("#q-task").textContent = res.task;
     $("#q-final-result").textContent = res.final_result;
@@ -74,8 +125,10 @@ $("#btn-generate-question").addEventListener("click", async () => {
   } catch (err) {
     alert("Could not generate a question: " + err.message);
   } finally {
-    btn.disabled = false;
-    btn.textContent = "Generate Question";
+    if (getQuotaRemaining() > 0) {
+      btn.disabled = false;
+      btn.textContent = "Generate Question";
+    }
   }
 });
 
@@ -98,6 +151,7 @@ function buildChainUI() {
   state.plannedHints = [];   // fresh question → re-plan on next hint click
   state.chain[0] = q.cause;
   state.chain[total - 1] = q.final_result;
+  state.planInFlight = null;  // fresh question → drop any stale in-flight plan
 
   for (let i = 0; i < total; i++) {
     const box = document.createElement("div");
@@ -155,17 +209,25 @@ async function requestHint(idx, btn, bubble) {
   try {
     // FIRST hint click for this question: plan the ENTIRE chain in one AI
     // call so every step is part of one coherent causal bridge. Then cache.
+    // Race-guard: if a plan call is already in flight, await the same promise
+    // so two quick taps don't burn two AI calls.
     if (!state.plannedHints || state.plannedHints.length === 0) {
-      try {
-        const res = await api("/plan-chain", {
+      if (!state.planInFlight) {
+        state.planInFlight = api("/plan-chain", {
           cause: state.question.cause,
           final_result: state.question.final_result,
           total_steps: CHAIN_LENGTH,
+        }).then((res) => {
+          state.plannedHints = Array.isArray(res.hints) ? res.hints : [];
+          state.planInFlight = null;
+          return state.plannedHints;
+        }).catch(() => {
+          state.plannedHints = [];
+          state.planInFlight = null;
+          return [];
         });
-        state.plannedHints = Array.isArray(res.hints) ? res.hints : [];
-      } catch (e) {
-        state.plannedHints = [];
       }
+      await state.planInFlight;
     }
 
     // hints[0] = step 2, hints[1] = step 3, hints[2] = step 4 (for CHAIN_LENGTH=5)
@@ -374,7 +436,7 @@ document.addEventListener("click", (e) => {
 /* ---------- Restart ---------- */
 $("#btn-restart").addEventListener("click", () => {
   state.question = null;
-  state.chain = []; state.hints = []; state.plannedHints = [];
+  state.chain = []; state.hints = []; state.plannedHints = []; state.planInFlight = null;
   state.feedback = null; state.samples = null;
   $("#question-output").classList.add("hidden");
   $$("#axis-group .chip, #stance-group .chip").forEach((c) => c.classList.remove("selected"));
