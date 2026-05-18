@@ -3,16 +3,8 @@
    Vanilla JS. No frameworks.
    ========================================================= */
 
-/* ------------------------------------------------------------------
- * CONFIG — Worker URL
- * ------------------------------------------------------------------
- * After deploying the Cloudflare Worker (worker.js), set its URL here.
- * It can also be injected at deploy-time by Cloudflare Pages via an
- * environment variable that rewrites this file, but for free-tier
- * simplicity we hard-code it. Replace with your own:
- *   e.g. "https://easy-logic-worker.jasonchimyw.workers.dev"
- * ------------------------------------------------------------------ */
-const WORKER_URL = window.WORKER_URL || "https://easy-logic-worker.jasonchimyw.workers.dev";
+const WORKER_URL = (window.WORKER_URL || "https://easy-logic-worker.jasonchimyw.workers.dev")
+  .replace(/\/+$/, ""); // strip trailing slash defensively
 
 const CHAIN_LENGTH = 5;   // total boxes including given cause and final result
 
@@ -21,7 +13,8 @@ const state = {
   axis: null,
   stance: null,
   question: null,       // { cause, task, final_result, stance }
-  chain: [],            // student-typed steps (strings), index 0 = given cause, last = final result
+  chain: [],            // student-typed steps (strings)
+  hints: [],            // hints already shown (so AI doesn't repeat them)
   feedback: null,
   samples: null,
 };
@@ -106,13 +99,12 @@ function buildChainUI() {
   const q = state.question;
   const total = CHAIN_LENGTH;
 
-  // initialise chain array
   state.chain = new Array(total).fill("");
+  state.hints = new Array(total).fill(null);
   state.chain[0] = q.cause;
   state.chain[total - 1] = q.final_result;
 
   for (let i = 0; i < total; i++) {
-    // Box
     const box = document.createElement("div");
     box.className = "chain-box";
     if (i === 0) box.classList.add("given");
@@ -127,19 +119,16 @@ function buildChainUI() {
     box.appendChild(header);
 
     if (i === 0) {
-      // Given cause — read-only
       const text = document.createElement("div");
       text.className = "given-text";
       text.textContent = q.cause;
       box.appendChild(text);
     } else if (i === total - 1) {
-      // Final result label — read-only
       const text = document.createElement("div");
       text.className = "final-text";
       text.textContent = `↓ ${q.final_result}`;
       box.appendChild(text);
     } else {
-      // Editable input
       const input = document.createElement("input");
       input.type = "text";
       input.placeholder = `Write step ${i + 1} of the deduction chain in English…`;
@@ -149,7 +138,6 @@ function buildChainUI() {
       });
       box.appendChild(input);
 
-      // Hint button
       const hintBtn = document.createElement("button");
       hintBtn.className = "hint-btn";
       hintBtn.type = "button";
@@ -157,7 +145,6 @@ function buildChainUI() {
       hintBtn.addEventListener("click", () => requestHint(i, hintBtn, bubble));
       box.appendChild(hintBtn);
 
-      // Hint bubble (Cantonese)
       const bubble = document.createElement("div");
       bubble.className = "hint-bubble";
       box.appendChild(bubble);
@@ -165,7 +152,6 @@ function buildChainUI() {
 
     container.appendChild(box);
 
-    // Arrow between boxes
     if (i < total - 1) {
       const arrow = document.createElement("div");
       arrow.className = "chain-arrow";
@@ -179,14 +165,23 @@ async function requestHint(idx, btn, bubble) {
   btn.disabled = true;
   btn.textContent = "Loading…";
   try {
-    const previousStep = state.chain[idx - 1] || state.question.cause;
+    // Build "previous_steps": prefer user-typed text; fall back to the hint
+    // we showed them for that box (so the AI does not repeat itself).
+    const priorContext = [];
+    for (let i = 1; i < idx; i++) {
+      const typed = (state.chain[i] || "").trim();
+      if (typed) priorContext.push(typed);
+      else if (state.hints[i]) priorContext.push(state.hints[i]);
+    }
+
     const res = await api("/get-hint", {
       cause: state.question.cause,
       final_result: state.question.final_result,
       step_number: idx + 1,
       total_steps: CHAIN_LENGTH,
-      previous_step: previousStep,
+      previous_steps: priorContext,
     });
+    state.hints[idx] = res.hint;
     bubble.textContent = res.hint;
     bubble.classList.add("visible");
   } catch (err) {
@@ -202,7 +197,6 @@ async function requestHint(idx, btn, bubble) {
  * Step 3 — Check Logic
  * ------------------------------------------------------------------ */
 $("#btn-check-logic").addEventListener("click", async () => {
-  // Validate at least middle boxes have content
   const middleFilled = state.chain.slice(1, -1).every((s) => s && s.trim().length > 0);
   if (!middleFilled) {
     if (!confirm("Some steps are empty. Submit anyway?")) return;
@@ -277,6 +271,7 @@ document.addEventListener("click", (e) => {
 $("#btn-restart").addEventListener("click", () => {
   state.question = null;
   state.chain = [];
+  state.hints = [];
   state.feedback = null;
   state.samples = null;
   $("#question-output").classList.add("hidden");
