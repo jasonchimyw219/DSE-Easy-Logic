@@ -10,9 +10,9 @@
  * It can also be injected at deploy-time by Cloudflare Pages via an
  * environment variable that rewrites this file, but for free-tier
  * simplicity we hard-code it. Replace with your own:
- *   e.g. "https://easy-logic-worker.your-subdomain.workers.dev"
+ *   e.g. "https://easy-logic-worker.jasonchimyw.workers.dev"
  * ------------------------------------------------------------------ */
-const WORKER_URL = window.WORKER_URL || "https://easy-logic-worker.YOUR-SUBDOMAIN.workers.dev";
+const WORKER_URL = window.WORKER_URL || "https://easy-logic-worker.jasonchimyw.workers.dev";
 
 const CHAIN_LENGTH = 5;   // total boxes including given cause and final result
 
