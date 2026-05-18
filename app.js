@@ -4,17 +4,17 @@
    ========================================================= */
 
 const WORKER_URL = (window.WORKER_URL || "https://easy-logic-worker.jasonchimyw.workers.dev")
-  .replace(/\/+$/, ""); // strip trailing slash defensively
+  .replace(/\/+$/, "");
 
-const CHAIN_LENGTH = 5;   // total boxes including given cause and final result
+const CHAIN_LENGTH = 5;
 
 /* ---------- State ---------- */
 const state = {
   axis: null,
   stance: null,
-  question: null,       // { cause, task, final_result, stance }
-  chain: [],            // student-typed steps (strings)
-  hints: [],            // hints already shown (so AI doesn't repeat them)
+  question: null,
+  chain: [],
+  hints: [],          // hints shown so far (parallel to chain)
   feedback: null,
   samples: null,
 };
@@ -27,14 +27,12 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 function gotoStep(n) {
   $$(".step-panel").forEach((p) => p.classList.remove("active"));
   $(`#step-${n}`).classList.add("active");
-
   $$(".steps .step").forEach((s) => {
     const num = parseInt(s.dataset.step, 10);
     s.classList.remove("active", "done");
     if (num < n) s.classList.add("done");
     else if (num === n) s.classList.add("active");
   });
-
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -49,7 +47,6 @@ function wireChipGroup(groupId, onSelect) {
     });
   });
 }
-
 wireChipGroup("axis-group", (v) => { state.axis = v; refreshGenerateButton(); });
 wireChipGroup("stance-group", (v) => { state.stance = v; refreshGenerateButton(); });
 
@@ -64,14 +61,11 @@ $("#btn-generate-question").addEventListener("click", async () => {
   const btn = $("#btn-generate-question");
   btn.disabled = true;
   btn.textContent = "Generating…";
-
   try {
     const res = await api("/generate-question", {
-      axis: state.axis,
-      stance: state.stance,
+      axis: state.axis, stance: state.stance,
     });
     state.question = res;
-
     $("#q-cause").textContent = res.cause;
     $("#q-task").textContent = res.task;
     $("#q-final-result").textContent = res.final_result;
@@ -98,7 +92,6 @@ function buildChainUI() {
 
   const q = state.question;
   const total = CHAIN_LENGTH;
-
   state.chain = new Array(total).fill("");
   state.hints = new Array(total).fill(null);
   state.chain[0] = q.cause;
@@ -120,27 +113,22 @@ function buildChainUI() {
 
     if (i === 0) {
       const text = document.createElement("div");
-      text.className = "given-text";
-      text.textContent = q.cause;
+      text.className = "given-text"; text.textContent = q.cause;
       box.appendChild(text);
     } else if (i === total - 1) {
       const text = document.createElement("div");
-      text.className = "final-text";
-      text.textContent = `↓ ${q.final_result}`;
+      text.className = "final-text"; text.textContent = `↓ ${q.final_result}`;
       box.appendChild(text);
     } else {
       const input = document.createElement("input");
       input.type = "text";
       input.placeholder = `Write step ${i + 1} of the deduction chain in English…`;
       input.dataset.index = String(i);
-      input.addEventListener("input", (e) => {
-        state.chain[i] = e.target.value;
-      });
+      input.addEventListener("input", (e) => { state.chain[i] = e.target.value; });
       box.appendChild(input);
 
       const hintBtn = document.createElement("button");
-      hintBtn.className = "hint-btn";
-      hintBtn.type = "button";
+      hintBtn.className = "hint-btn"; hintBtn.type = "button";
       hintBtn.textContent = "Hint 提示";
       hintBtn.addEventListener("click", () => requestHint(i, hintBtn, bubble));
       box.appendChild(hintBtn);
@@ -154,26 +142,21 @@ function buildChainUI() {
 
     if (i < total - 1) {
       const arrow = document.createElement("div");
-      arrow.className = "chain-arrow";
-      arrow.textContent = "↓";
+      arrow.className = "chain-arrow"; arrow.textContent = "↓";
       container.appendChild(arrow);
     }
   }
 }
 
 async function requestHint(idx, btn, bubble) {
-  btn.disabled = true;
-  btn.textContent = "Loading…";
+  btn.disabled = true; btn.textContent = "Loading…";
   try {
-    // Build "previous_steps": prefer user-typed text; fall back to the hint
-    // we showed them for that box (so the AI does not repeat itself).
     const priorContext = [];
     for (let i = 1; i < idx; i++) {
       const typed = (state.chain[i] || "").trim();
       if (typed) priorContext.push(typed);
       else if (state.hints[i]) priorContext.push(state.hints[i]);
     }
-
     const res = await api("/get-hint", {
       cause: state.question.cause,
       final_result: state.question.final_result,
@@ -188,13 +171,12 @@ async function requestHint(idx, btn, bubble) {
     bubble.textContent = "（提示載入失敗，請稍後再試）";
     bubble.classList.add("visible");
   } finally {
-    btn.disabled = false;
-    btn.textContent = "Hint 提示";
+    btn.disabled = false; btn.textContent = "Hint 提示";
   }
 }
 
 /* ------------------------------------------------------------------
- * Step 3 — Check Logic
+ * Step 3 — Check Logic  (now also passes hints; renders flowchart)
  * ------------------------------------------------------------------ */
 $("#btn-check-logic").addEventListener("click", async () => {
   const middleFilled = state.chain.slice(1, -1).every((s) => s && s.trim().length > 0);
@@ -212,12 +194,13 @@ $("#btn-check-logic").addEventListener("click", async () => {
       final_result: state.question.final_result,
       stance: state.question.stance,
       chain: state.chain,
+      hints: state.hints,        // ← lets the AI know which Cantonese hints guided the student
     });
     state.feedback = res;
 
-    renderFeedbackSection("#fb-logic", res.logic_check);
-    renderFeedbackSection("#fb-language", res.language_check);
-    renderFeedbackSection("#fb-topic", res.topic_sentence);
+    $("#fb-logic").textContent = (res.logic_check || "").trim();
+    $("#fb-language").textContent = (res.language_check || "").trim();
+    renderFlowchart(res.corrected_chain);
 
     $("#feedback-loading").classList.add("hidden");
     $("#feedback-output").classList.remove("hidden");
@@ -227,10 +210,39 @@ $("#btn-check-logic").addEventListener("click", async () => {
   }
 });
 
-function renderFeedbackSection(selector, text) {
-  $(selector).textContent = (text || "").trim();
+function renderFlowchart(steps) {
+  const container = $("#fb-flowchart");
+  container.innerHTML = "";
+  const list = Array.isArray(steps) && steps.length
+    ? steps
+    : [state.question.cause, "(no improved chain returned)", state.question.final_result];
+  list.forEach((step, i) => {
+    const box = document.createElement("div");
+    box.className = "flow-box";
+    if (i === 0) box.classList.add("is-cause");
+    if (i === list.length - 1) box.classList.add("is-result");
+
+    const num = document.createElement("span");
+    num.className = "flow-num"; num.textContent = i + 1;
+    box.appendChild(num);
+
+    const txt = document.createElement("span");
+    txt.className = "flow-text"; txt.textContent = step;
+    box.appendChild(txt);
+
+    container.appendChild(box);
+
+    if (i < list.length - 1) {
+      const arrow = document.createElement("div");
+      arrow.className = "flow-arrow-small"; arrow.textContent = "↓";
+      container.appendChild(arrow);
+    }
+  });
 }
 
+/* ------------------------------------------------------------------
+ * Step 4 — Samples + vocabulary
+ * ------------------------------------------------------------------ */
 $("#btn-to-step-4").addEventListener("click", async () => {
   gotoStep(4);
   $("#samples-loading").classList.remove("hidden");
@@ -244,8 +256,9 @@ $("#btn-to-step-4").addEventListener("click", async () => {
       chain: state.chain,
     });
     state.samples = res;
-    $("#sample-lv3").textContent = res.lv3;
-    $("#sample-lv5").textContent = res.lv5;
+
+    renderSample("sample-lv3", "vocab-lv3", res.lv3, res.lv3_vocab);
+    renderSample("sample-lv5", "vocab-lv5", res.lv5, res.lv5_vocab);
 
     $("#samples-loading").classList.add("hidden");
     $("#samples-output").classList.remove("hidden");
@@ -254,6 +267,68 @@ $("#btn-to-step-4").addEventListener("click", async () => {
     alert("Could not generate samples: " + err.message);
   }
 });
+
+function renderSample(sampleId, vocabId, paragraph, vocab) {
+  const sampleEl = $("#" + sampleId);
+  const safeText = paragraph || "";
+
+  // Highlight C1/C2 words inline (case-insensitive, whole-word).
+  // Build a single regex from the vocab words for one-pass replacement.
+  const words = (Array.isArray(vocab) ? vocab : [])
+    .map((v) => v && v.word)
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length); // longest first to avoid sub-matches
+
+  if (words.length) {
+    const escaped = words.map(escapeRegex);
+    const re = new RegExp(`\\b(${escaped.join("|")})\\b`, "gi");
+    const translations = {};
+    vocab.forEach((v) => { if (v && v.word) translations[v.word.toLowerCase()] = v.translation || ""; });
+
+    // Build DOM safely: split into nodes, never set innerHTML with user text.
+    sampleEl.textContent = "";
+    let lastIndex = 0;
+    let m;
+    while ((m = re.exec(safeText)) !== null) {
+      if (m.index > lastIndex) {
+        sampleEl.appendChild(document.createTextNode(safeText.slice(lastIndex, m.index)));
+      }
+      const mark = document.createElement("mark");
+      mark.className = "c-word";
+      mark.textContent = m[0];
+      const tr = translations[m[0].toLowerCase()] || "";
+      if (tr) mark.title = tr;
+      sampleEl.appendChild(mark);
+      lastIndex = m.index + m[0].length;
+    }
+    if (lastIndex < safeText.length) {
+      sampleEl.appendChild(document.createTextNode(safeText.slice(lastIndex)));
+    }
+  } else {
+    sampleEl.textContent = safeText;
+  }
+
+  // Render glossary list
+  const ul = $("#" + vocabId);
+  ul.innerHTML = "";
+  if (!Array.isArray(vocab) || vocab.length === 0) {
+    const li = document.createElement("li");
+    li.className = "vocab-empty";
+    li.textContent = "(No advanced vocabulary detected.)";
+    ul.appendChild(li);
+    return;
+  }
+  vocab.forEach((v) => {
+    if (!v || !v.word) return;
+    const li = document.createElement("li");
+    const w = document.createElement("span"); w.className = "vw"; w.textContent = v.word;
+    const t = document.createElement("span"); t.className = "vt"; t.textContent = v.translation || "";
+    li.appendChild(w); li.appendChild(t);
+    ul.appendChild(li);
+  });
+}
+
+function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
 /* ---------- Copy-to-clipboard ---------- */
 document.addEventListener("click", (e) => {
@@ -270,10 +345,8 @@ document.addEventListener("click", (e) => {
 /* ---------- Restart ---------- */
 $("#btn-restart").addEventListener("click", () => {
   state.question = null;
-  state.chain = [];
-  state.hints = [];
-  state.feedback = null;
-  state.samples = null;
+  state.chain = []; state.hints = [];
+  state.feedback = null; state.samples = null;
   $("#question-output").classList.add("hidden");
   $$("#axis-group .chip, #stance-group .chip").forEach((c) => c.classList.remove("selected"));
   state.axis = null; state.stance = null;
