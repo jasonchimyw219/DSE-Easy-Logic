@@ -40,6 +40,25 @@ function updateQuotaDisplay() {
   }
 }
 
+/* ---------- Used-topics memory (per device) ---------- */
+const USED_TOPICS_KEY = "el-used-topics";
+const USED_TOPICS_CAP = 15;
+function getUsedTopics() {
+  try {
+    const raw = localStorage.getItem(USED_TOPICS_KEY);
+    return raw ? (JSON.parse(raw) || []) : [];
+  } catch { return []; }
+}
+function addUsedTopic(topic) {
+  if (!topic || typeof topic !== "string") return;
+  try {
+    const list = getUsedTopics();
+    list.push(topic);
+    while (list.length > USED_TOPICS_CAP) list.shift();
+    localStorage.setItem(USED_TOPICS_KEY, JSON.stringify(list));
+  } catch {}
+}
+
 /* ---------- State ---------- */
 const state = {
   axis: null,
@@ -113,9 +132,12 @@ $("#btn-generate-question").addEventListener("click", async () => {
   btn.textContent = "Generating…";
   try {
     const res = await api("/generate-question", {
-      axis: state.axis, stance: state.stance,
+      axis: state.axis,
+      stance: state.stance,
+      avoid: getUsedTopics(),    // ← tell AI what NOT to reuse
     });
     state.question = res;
+    if (res && res.topic) addUsedTopic(res.topic);
     consumeQuota();              // ← only count successful generations
     updateQuotaDisplay();
     $("#q-cause").textContent = res.cause;
@@ -173,7 +195,7 @@ function buildChainUI() {
       box.appendChild(text);
     } else if (i === total - 1) {
       const text = document.createElement("div");
-      text.className = "final-text"; text.textContent = `↓ ${q.final_result}`;
+      text.className = "final-text"; text.textContent = q.final_result;
       box.appendChild(text);
     } else {
       const input = document.createElement("input");
@@ -195,12 +217,8 @@ function buildChainUI() {
     }
 
     container.appendChild(box);
-
-    if (i < total - 1) {
-      const arrow = document.createElement("div");
-      arrow.className = "chain-arrow"; arrow.textContent = "↓";
-      container.appendChild(arrow);
-    }
+    // No directional arrow between boxes — vertical stacking already
+    // implies flow, and a literal "↓" can be misread as "decreases".
   }
 }
 
@@ -322,12 +340,7 @@ function renderFlowchart(steps) {
     box.appendChild(txt);
 
     container.appendChild(box);
-
-    if (i < list.length - 1) {
-      const arrow = document.createElement("div");
-      arrow.className = "flow-arrow-small"; arrow.textContent = "↓";
-      container.appendChild(arrow);
-    }
+    // No directional arrow — same rationale as the Step II chain.
   });
 }
 
