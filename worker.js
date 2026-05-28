@@ -209,7 +209,7 @@ Each hint is ONE complete short sentence (約 16–26 個字, MUST end with 「�
 CRITICAL RULES for the hint chain:
 1. The full chain reads: TOPIC_SENTENCE → HINT_1 → HINT_2 → … → FINAL_RESULT.
 2. Each hint MUST add a DISTINCT NEW causal link. It must answer "and therefore what?" of the PREVIOUS step — never restate it.
-3. NO two hints may express the same idea even paraphrased. If HINT_1 says "students save money", HINT_2 must NOT say "less financial burden" — pick a DIFFERENT downstream consequence (e.g., "attendance becomes more regular", "dropout risk falls", "more energy for class").
+3. NO two hints may express the same idea even paraphrased. If HINT_1 says "students save money", HINT_2 must NOT say "less financial burden" — pick a DIFFERENT downstream consequence (e.g., "a[...]
 4. Before writing, mentally check every adjacent pair is a tight cause→effect with no obvious missing intermediate.
 5. Use ordinary modern Hong Kong 繁體中文.
 
@@ -285,7 +285,7 @@ async function getHint(env, { cause, final_result, step_number, total_steps, pre
 
 Output ONE complete short sentence in Traditional Chinese (繁體中文), 16–26 個字, ending with 「。」. Do NOT use English. Do NOT use quotation marks. Output ONLY the sentence.
 
-CRITICAL: the hint must be a NEW causal link that does NOT repeat any earlier step shown to you. It must answer "and therefore what?" of the previous step — not restate it. Use a fresh consequence (different verb, different noun) so each step adds something new to the chain.`;
+CRITICAL: the hint must be a NEW causal link that does NOT repeat any earlier step shown to you. It must answer "and therefore what?" of the previous step — not restate it. Use a fresh conseque[...]`;
 
   const user = `背景因 (CAUSE)：${cause}
 最終果 (FINAL_RESULT)：${final_result}
@@ -324,9 +324,9 @@ async function checkLogic(env, { cause, final_result, stance, chain, hints }) {
 
   const system = `You are a DSE English writing examiner. A student has written a logical deduction chain for a one-sided argumentative essay.
 
-The student's chain has ${chain.length} steps. Step 1 is the GIVEN topic sentence and the LAST step is the GIVEN final result — both supplied by the platform. Do NOT mark those wrong; only the middle steps.
+The student's chain has ${chain.length} steps. Step 1 is the GIVEN topic sentence and the LAST step is the GIVEN final result — both supplied by the platform. Do NOT mark those wrong; only the [...]
 
-Evaluate in EXACTLY four labelled sections, in this order. Use plain text (no Markdown, no asterisks). Refer to steps as "Step 1", "Step 2" — NEVER use [1] or [2]. Use simple English a secondary student can understand.
+Evaluate in EXACTLY four labelled sections, in this order. Use plain text (no Markdown, no asterisks). Refer to steps as "Step 1", "Step 2" — NEVER use [1] or [2]. Use simple English a secondar[...]
 
 LOGIC:
 For EVERY adjacent pair (Step N → Step N+1) ask: "Does Step N+1 follow tightly from Step N, or is there an obvious INTERMEDIATE cause missing between them?"
@@ -335,7 +335,7 @@ For each gap you find, you MUST:
   (b) quote the jump in plain words
   (c) state the MISSING BRIDGING IDEA in ONE sentence
 Worked example of a missing-link diagnosis:
-  "Step 3 ('students reduce their transportation costs') jumps too quickly to Step 4 ('students focus more on their studies'). The missing link is: lower transport costs reduce the financial pressure that pushes low-income students to drop out, so attendance stabilises — and only THEN can they focus."
+  "Step 3 ('students reduce their transportation costs') jumps too quickly to Step 4 ('students focus more on their studies'). The missing link is: lower transport costs reduce the financial pres[...]
 If a student's wording is a reasonable translation of the Cantonese hint they were shown, treat that step as LOGICALLY VALID even if the English is rough.
 Keep this section to ≤ 7 short sentences.
 
@@ -350,7 +350,7 @@ LANGUAGE:
 List specific grammar errors with corrections in the form "❌ wrong → ✅ right". Suggest better vocabulary. ≤ 4 lines. If nothing major, say "No major language issues."
 
 TOPIC:
-One polished English topic sentence using the formula: [Cause] → [mechanism] → [Final Result]. Example shape: "By [cause], students are able to [mechanism], which ultimately [Final Result]."`;
+One polished English topic sentence using the formula: [Cause] → [mechanism] → [Final Result]. Example shape: "By [cause], students are able to [mechanism], which ultimately [Final Result]."`[...]`;
 
   const user = `GIVEN TOPIC SENTENCE (Step 1, fixed): ${givenStep1}
 GIVEN FINAL RESULT (last step, fixed): ${final_result}
@@ -431,7 +431,7 @@ async function generateSamples(env, { cause, final_result, stance, chain }) {
 STRICT RULES (apply to BOTH paragraphs):
 1. Each sample is ONE body paragraph that ${stanceLabel} the proposal.
 2. Structure = TOPIC SENTENCE + tight cause→effect chain ending at the FINAL RESULT.
-3. FORBIDDEN: NO "Dear Editor", NO greeting, NO introduction, NO rebuttal, NO counter-argument, NO conclusion, NO "Firstly/Secondly", NO "In conclusion", NO multiple ideas. ONE key idea, ONE chain.
+3. FORBIDDEN: NO "Dear Editor", NO greeting, NO introduction, NO rebuttal, NO counter-argument, NO conclusion, NO "Firstly/Secondly", NO "In conclusion", NO multiple ideas. ONE key idea, ONE chai[...]
 4. Lv 5** must use noticeably more sophisticated vocabulary and sentence variety than Lv 3.
 5. Each sample is 110–170 words.
 
