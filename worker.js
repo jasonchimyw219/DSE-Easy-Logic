@@ -171,7 +171,7 @@ async function getHint(env, { cause, final_result, step_number, total_steps, pre
 
   const system = `You are a DSE writing tutor helping a Hong Kong student build a logical deduction chain.
 
-Give a short hint in Traditional Chinese (繁體中文) of 8 to 18 characters describing what logically happens at this step in the chain. Do NOT write a full sentence. Do NOT use English. Do NOT add quotation marks or any explanation. Output ONLY the short phrase.
+Give a short hint in Traditional Chinese (繁體中文) of 8 to 18 characters describing what logically happens at this step in the chain. Do NOT write a full sentence. Do NOT use English. Do NOT[...]
 
 Reference mechanism patterns you may draw from:
 - Academic Performance: 減少學習疲勞、增加溫習時間、提升課堂投入感
@@ -209,12 +209,12 @@ async function checkLogic(env, { cause, final_result, stance, chain }) {
 
   const system = `You are a DSE English writing examiner. A student has written a logical deduction chain for a one-sided argumentative essay.
 
-Evaluate the chain in EXACTLY three labelled sections. Use plain text (no Markdown headers, no asterisks). Each section starts on a new line with its label in CAPS followed by a colon. Keep each section concise (3–6 lines). Use simple English a secondary student can understand.
+Evaluate the chain in EXACTLY three labelled sections. Use plain text (no Markdown headers, no asterisks). Each section starts on a new line with its label in CAPS followed by a colon. Keep each [...]
 
 Sections (in this order):
 LOGIC: Is each step causally connected? Flag leaps or overgeneralisations. Suggest a corrected chain.
 LANGUAGE: List specific grammar errors with corrections in the form "❌ wrong → ✅ right". Suggest better vocabulary.
-TOPIC: One polished English topic sentence using the formula: [Cause] → [mechanism] → [Final Result]. Example shape: "By [cause], students are able to [mechanism], which ultimately [Final Result]."`;
+TOPIC: One polished English topic sentence using the formula: [Cause] → [mechanism] → [Final Result]. Example shape: "By [cause], students are able to [mechanism], which ultimately [Final Res[...]
 
   const user = `Cause: ${cause}
 Stance: ${stance}
@@ -240,7 +240,7 @@ function pickSection(text, label) {
   if (!text) return "";
   const labels = ["LOGIC", "LANGUAGE", "TOPIC"];
   const re = new RegExp(
-    `${label}\\s*[:：]\\s*([\\s\\S]*?)(?=\\n\\s*(?:${labels.join("|")})\\s*[:：]|$)`,
+    `${label}\\s*[:：]\\s*([\\s\\S]*?)(?=\\n\\s*(?:${labels.join("|")}\\s*[:：]|$)`,
     "i"
   );
   const m = text.match(re);
@@ -263,7 +263,7 @@ Output format — produce EXACTLY this structure, with these literal markers and
 ===LV3===
 (paragraph ~80 words, simple vocabulary, 2–3 step logic, one example, minor grammar errors typical of a HK student, mechanical transitions such as "The first reason is...", "In conclusion...")
 ===LV5===
-(paragraph ~150 words, sophisticated vocabulary — naturally include words like "exacerbate", "inherently", "detrimental" where they fit, 4–5 step deduction chain, one counter-argument with a rebuttal offering a concrete alternative, one statistic, formal tone, varied sentence structures, strong conclusion ending with reflection or a call to ponder.)`;
+(paragraph ~150 words, sophisticated vocabulary — naturally include words like "exacerbate", "inherently", "detrimental" where they fit, 4–5 step deduction chain, one counter-argument with a [...]`;
 
   const user = `Cause: ${cause}
 Stance: ${stance}
