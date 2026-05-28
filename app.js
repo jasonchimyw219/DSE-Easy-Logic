@@ -251,7 +251,6 @@ function ensurePlannedChain() {
     paintTopicSentence(state.topicSentence);
     state.planInFlight = null;
   }).catch(() => {
-    // Fallback: use the raw question cause so the user can still proceed.
     state.topicSentence = state.question.cause;
     state.chain[0] = state.topicSentence;
     paintTopicSentence(state.topicSentence);
