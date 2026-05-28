@@ -46,6 +46,9 @@ export default {
         case "/generate-question":
           result = await generateQuestion(env, body);
           break;
+        case "/plan-chain":
+          result = await planChain(env, body);
+          break;
         case "/get-hint":
           result = await getHint(env, body);
           break;
@@ -162,75 +165,225 @@ The cause should reflect real Hong Kong social issues. The stance is ${stanceTex
 }
 
 /* ------------------------------------------------------------------
+ * 1b. /plan-chain
+ *     ONE AI call that plans the ENTIRE chain so:
+ *      - Step II's first box is a proper TOPIC SENTENCE (not the raw
+ *        question stimulus)
+ *      - Each Cantonese hint is a complete short sentence
+ *      - No two hints repeat the same idea
+ *     Returns: { topic_sentence, hints: [string, ...] }
+ *     length of hints == total_steps - 2  (middle boxes only)
+ * ------------------------------------------------------------------ */
+async function planChain(env, { cause, final_result, total_steps }) {
+  if (!cause || !final_result) throw new Error("cause and final_result are required");
+  const total = Math.max(3, parseInt(total_steps, 10) || 5);
+  const middleCount = total - 2;
+
+  const hintLabels = Array.from({ length: middleCount }, (_, i) => `HINT_${i + 1}`);
+  const formatBlock = ["TOPIC_SENTENCE: <one complete English sentence>"]
+    .concat(hintLabels.map((l) => `${l}: <繁體中文，一句完整短句，必須以 「。」結尾>`))
+    .join("\n");
+
+  const system = `You are a DSE English writing tutor designing the deduction chain for a one-sided argumentative essay about a Hong Kong situation.
+
+You are given:
+- CAUSE: the question stimulus
+- FINAL_RESULT: the outcome the essay must argue toward
+
+Produce TWO things.
+
+PART A — TOPIC_SENTENCE (in English)
+ONE precise topic sentence (≤ 28 words) that:
+  • names the proposal / phenomenon under discussion
+  • names the MAIN MECHANISM the essay will defend
+  • PREVIEWS how that mechanism leads to the FINAL_RESULT
+Model example (for inspiration only, do NOT copy):
+  "The most evident benefit of this policy lies in providing
+   educational access for low-income families in Hong Kong,
+   which drives learning motivation."
+
+PART B — HINTS (in 繁體中文)
+Produce EXACTLY ${middleCount} bridging step(s).
+Each hint is ONE complete short sentence (約 16–26 個字, MUST end with 「。」, NEVER truncate mid-character).
+
+CRITICAL RULES for the hint chain:
+1. The full chain reads: TOPIC_SENTENCE → HINT_1 → HINT_2 → … → FINAL_RESULT.
+2. Each hint MUST add a DISTINCT NEW causal link. It must answer "and therefore what?" of the PREVIOUS step — never restate it.
+3. NO two hints may express the same idea even paraphrased. If HINT_1 says "students save money", HINT_2 must NOT say "less financial burden" — pick a DIFFERENT downstream consequence (e.g., "attendance becomes more regular", "dropout risk falls", "more energy for class").
+4. Before writing, mentally check every adjacent pair is a tight cause→effect with no obvious missing intermediate.
+5. Use ordinary modern Hong Kong 繁體中文.
+
+OUTPUT FORMAT — exactly these labelled lines, nothing else, no JSON, no markdown:
+${formatBlock}`;
+
+  const user = `CAUSE:
+${cause}
+
+FINAL_RESULT:
+${final_result}
+
+Produce the topic sentence and exactly ${middleCount} distinct, complete hints now.`;
+
+  // Generous max_tokens so 繁體中文 sentences never get cut.
+  const raw = await runAI(env, system, user, 900);
+
+  const pickLine = (label) => {
+    const re = new RegExp(`^\\s*${label}\\s*[:：]\\s*(.+?)\\s*$`, "im");
+    const m = raw.match(re);
+    return m ? m[1].trim() : "";
+  };
+
+  let topic_sentence = pickLine("TOPIC_SENTENCE");
+  const hints = [];
+  for (let i = 1; i <= middleCount; i++) hints.push(pickLine(`HINT_${i}`));
+
+  // Repair truncation: if a hint doesn't end with sentence-final
+  // punctuation, trim back to the last clean phrase and close with 「。」.
+  const SENTENCE_END = /[。！？!?.]$/;
+  for (let i = 0; i < hints.length; i++) {
+    if (hints[i] && !SENTENCE_END.test(hints[i])) {
+      hints[i] = hints[i].replace(/[，、,；;：:]?\s*[一-鿿]{0,2}$/, "").trim();
+      if (hints[i]) hints[i] += "。";
+    }
+  }
+  // Semantic dedupe (adjacent): tag near-identical neighbours.
+  const norm = (s) => (s || "").replace(/[\s，。、,.!?；;：:「」"'（）()]/g, "").toLowerCase();
+  for (let i = 1; i < hints.length; i++) {
+    if (hints[i] && hints[i - 1] && norm(hints[i]) === norm(hints[i - 1])) {
+      hints[i] = hints[i].replace(/。$/, "") + "（請改寫此步以避免與上一步重覆）。";
+    }
+  }
+  // Fill blanks
+  for (let i = 0; i < middleCount; i++) {
+    if (!hints[i]) hints[i] = "（請填寫此處的推論步驟）";
+  }
+  // Fallback topic sentence
+  if (!topic_sentence) {
+    topic_sentence = `This essay argues that the proposal described above will, through its main mechanism, ultimately deliver ${final_result}.`;
+  }
+
+  return { topic_sentence, hints };
+}
+
+/* ------------------------------------------------------------------
  * 2. /get-hint  →  Cantonese (Traditional Chinese) hint
  * ------------------------------------------------------------------ */
-async function getHint(env, { cause, final_result, step_number, total_steps, previous_step }) {
+async function getHint(env, { cause, final_result, step_number, total_steps, previous_step, previous_steps }) {
   if (!cause || !final_result || !step_number) {
     throw new Error("cause, final_result and step_number are required");
   }
 
+  // Backward-compat: accept either an array of prior steps, or a single one.
+  let priors = [];
+  if (Array.isArray(previous_steps)) priors = previous_steps.filter(Boolean);
+  else if (previous_step) priors = [previous_step];
+  const priorBlock = priors.length
+    ? priors.map((p, i) => `- 第 ${i + 2} 步：${p}`).join("\n")
+    : "（無）";
+
   const system = `You are a DSE writing tutor helping a Hong Kong student build a logical deduction chain.
 
-Give a short hint in Traditional Chinese (繁體中文) of 8 to 18 characters describing what logically happens at this step in the chain. Do NOT write a full sentence. Do NOT use English. Do NOT[...]
+Output ONE complete short sentence in Traditional Chinese (繁體中文), 16–26 個字, ending with 「。」. Do NOT use English. Do NOT use quotation marks. Output ONLY the sentence.
 
-Reference mechanism patterns you may draw from:
-- Academic Performance: 減少學習疲勞、增加溫習時間、提升課堂投入感
-- Well-being: 減低壓力、改善睡眠、減少比較壓力
-- Social Harmony: 減少滋擾、建立公共規範、加強社區凝聚力
-- Economic Vitality: 增加人流、嚇退潛在顧客、小商戶難以經營
-- Employability: 擴闊見識、培養可轉移技能
-- Public Health: 提升風險認識、減少有害攝取`;
+CRITICAL: the hint must be a NEW causal link that does NOT repeat any earlier step shown to you. It must answer "and therefore what?" of the previous step — not restate it. Use a fresh consequence (different verb, different noun) so each step adds something new to the chain.`;
 
-  const user = `Topic / cause: ${cause}
-Final result to reach: ${final_result}
-This is step ${step_number} of ${total_steps}.
-Previous step was: ${previous_step}
+  const user = `背景因 (CAUSE)：${cause}
+最終果 (FINAL_RESULT)：${final_result}
+這是第 ${step_number} 步（共 ${total_steps} 步）。
 
-Give the next step as a short 繁體中文 phrase (8–18 characters). Output only the phrase.`;
+之前已經寫過的步驟（不要重覆它們的意思）：
+${priorBlock}
 
-  let raw = await runAI(env, system, user, 80);
-  // sanitise: take first line, trim quotes / punctuation
+請寫第 ${step_number} 步，一句完整的繁體中文短句，必須以 「。」結尾。`;
+
+  // Bump max_tokens so a full 繁體中文 sentence isn't cut mid-character.
+  let raw = await runAI(env, system, user, 220);
   let hint = raw.split(/\r?\n/)[0].trim().replace(/^["「『]+|["」』]+$/g, "");
-  // clamp length to keep it short
-  if (hint.length > 30) hint = hint.slice(0, 30);
+  // Ensure sentence-final punctuation; never leave a mid-character cut.
+  const SENTENCE_END = /[。！？!?.]$/;
+  if (hint && !SENTENCE_END.test(hint)) {
+    hint = hint.replace(/[，、,；;：:]?\s*[一-鿿]{0,2}$/, "").trim();
+    if (hint) hint += "。";
+  }
   return { hint };
 }
 
 /* ------------------------------------------------------------------
  * 3. /check-logic
  * ------------------------------------------------------------------ */
-async function checkLogic(env, { cause, final_result, stance, chain }) {
+async function checkLogic(env, { cause, final_result, stance, chain, hints }) {
   if (!cause || !final_result || !Array.isArray(chain)) {
     throw new Error("cause, final_result and chain are required");
   }
-  const chainText = chain
-    .map((s, i) => `[${i + 1}] ${s || "(empty)"}`)
-    .join(" → ");
+  const numbered = chain.map((s, i) => `Step ${i + 1}: ${s || "(empty)"}`).join("\n");
+  const hintLines = (Array.isArray(hints) ? hints : [])
+    .map((h, i) => (h ? `Step ${i + 1} hint shown to student: ${h}` : null))
+    .filter(Boolean)
+    .join("\n");
+  const givenStep1 = chain[0] || cause;
 
   const system = `You are a DSE English writing examiner. A student has written a logical deduction chain for a one-sided argumentative essay.
 
-Evaluate the chain in EXACTLY three labelled sections. Use plain text (no Markdown headers, no asterisks). Each section starts on a new line with its label in CAPS followed by a colon. Keep each [...]
+The student's chain has ${chain.length} steps. Step 1 is the GIVEN topic sentence and the LAST step is the GIVEN final result — both supplied by the platform. Do NOT mark those wrong; only the middle steps.
 
-Sections (in this order):
-LOGIC: Is each step causally connected? Flag leaps or overgeneralisations. Suggest a corrected chain.
-LANGUAGE: List specific grammar errors with corrections in the form "❌ wrong → ✅ right". Suggest better vocabulary.
-TOPIC: One polished English topic sentence using the formula: [Cause] → [mechanism] → [Final Result]. Example shape: "By [cause], students are able to [mechanism], which ultimately [Final Res[...]
+Evaluate in EXACTLY four labelled sections, in this order. Use plain text (no Markdown, no asterisks). Refer to steps as "Step 1", "Step 2" — NEVER use [1] or [2]. Use simple English a secondary student can understand.
 
-  const user = `Cause: ${cause}
-Stance: ${stance}
-Final Result target: ${final_result}
-Student's chain: ${chainText}`;
+LOGIC:
+For EVERY adjacent pair (Step N → Step N+1) ask: "Does Step N+1 follow tightly from Step N, or is there an obvious INTERMEDIATE cause missing between them?"
+For each gap you find, you MUST:
+  (a) name the pair explicitly, e.g. "Step 3 → Step 4"
+  (b) quote the jump in plain words
+  (c) state the MISSING BRIDGING IDEA in ONE sentence
+Worked example of a missing-link diagnosis:
+  "Step 3 ('students reduce their transportation costs') jumps too quickly to Step 4 ('students focus more on their studies'). The missing link is: lower transport costs reduce the financial pressure that pushes low-income students to drop out, so attendance stabilises — and only THEN can they focus."
+If a student's wording is a reasonable translation of the Cantonese hint they were shown, treat that step as LOGICALLY VALID even if the English is rough.
+Keep this section to ≤ 7 short sentences.
 
-  const raw = await runAI(env, system, user, 600);
+CORRECTED_CHAIN:
+A numbered list showing the IMPROVED chain that INCLUDES every bridging step you identified above.
+- Step 1 MUST equal the given topic sentence.
+- The LAST step MUST equal the given final result.
+- You MAY (and should, where needed) include MORE steps than the student wrote — aim for 4 to 7 total steps depending on how many bridges are needed.
+- Each step is ONE concise English sentence.
 
-  // Split the three sections
+LANGUAGE:
+List specific grammar errors with corrections in the form "❌ wrong → ✅ right". Suggest better vocabulary. ≤ 4 lines. If nothing major, say "No major language issues."
+
+TOPIC:
+One polished English topic sentence using the formula: [Cause] → [mechanism] → [Final Result]. Example shape: "By [cause], students are able to [mechanism], which ultimately [Final Result]."`;
+
+  const user = `GIVEN TOPIC SENTENCE (Step 1, fixed): ${givenStep1}
+GIVEN FINAL RESULT (last step, fixed): ${final_result}
+STANCE: ${stance || "(unspecified)"}
+
+STUDENT'S CHAIN:
+${numbered}
+
+${hintLines ? "HINTS THE STUDENT WAS SHOWN:\n" + hintLines : "(no hints recorded)"}
+
+Evaluate now. Be ruthless about missing intermediate links — that is the WHOLE POINT of the exercise.`;
+
+  const raw = await runAI(env, system, user, 1100);
+
   const logic = pickSection(raw, "LOGIC");
+  const correctedRaw = pickSection(raw, "CORRECTED_CHAIN");
   const language = pickSection(raw, "LANGUAGE");
   const topic = pickSection(raw, "TOPIC");
 
+  // Parse the numbered CORRECTED_CHAIN block into an array.
+  let corrected_chain = parseNumberedList(correctedRaw);
+  if (!corrected_chain.length) {
+    corrected_chain = [givenStep1, "(no bridging steps inferred — try again)", final_result];
+  } else {
+    corrected_chain[0] = givenStep1;
+    corrected_chain[corrected_chain.length - 1] = final_result;
+    if (corrected_chain.length < 3) corrected_chain.splice(1, 0, "(no bridging step inferred)");
+  }
+
   return {
     logic_check: logic || raw,
-    language_check: language || "(No language notes returned.)",
+    corrected_chain,
+    language_check: language || "No major language issues.",
     topic_sentence: topic || "(No topic sentence returned.)",
     _raw: raw,
   };
@@ -238,13 +391,26 @@ Student's chain: ${chainText}`;
 
 function pickSection(text, label) {
   if (!text) return "";
-  const labels = ["LOGIC", "LANGUAGE", "TOPIC"];
+  const labels = ["LOGIC", "CORRECTED_CHAIN", "LANGUAGE", "TOPIC"];
   const re = new RegExp(
-    `${label}\\s*[:：]\\s*([\\s\\S]*?)(?=\\n\\s*(?:${labels.join("|")}\\s*[:：]|$)`,
+    `${label}\\s*[:：]\\s*([\\s\\S]*?)(?=\\n\\s*(?:${labels.join("|")})\\s*[:：]|$)`,
     "i"
   );
   const m = text.match(re);
   return m ? m[1].trim() : "";
+}
+
+function parseNumberedList(text) {
+  if (!text) return [];
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const steps = [];
+  for (const line of lines) {
+    const m = line.match(/^(?:\d+\s*[\.\)]|[-•])\s*(.+)$/);
+    if (m) steps.push(m[1].trim());
+    else if (steps.length === 0) steps.push(line);
+    else steps[steps.length - 1] += " " + line;
+  }
+  return steps;
 }
 
 /* ------------------------------------------------------------------
@@ -256,31 +422,70 @@ async function generateSamples(env, { cause, final_result, stance, chain }) {
   const chainText = Array.isArray(chain)
     ? chain.filter(Boolean).join(" → ")
     : "";
+  const stanceLabel = stance === "con" ? "argue AGAINST" : "argue IN FAVOUR of";
 
-  const system = `You are a DSE English writing expert. Generate TWO model paragraphs for a Hong Kong DSE student. Both paragraphs are letters to the editor and MUST start with "Dear Editor,".
+  const system = `You are a DSE English writing expert. Produce TWO model BODY PARAGRAPHS of the SAME body argument at two different proficiency levels for a Hong Kong DSE student:
+- Lv 3  → competent (CEFR ~B2)
+- Lv 5** → top band (CEFR C1–C2)
 
-Output format — produce EXACTLY this structure, with these literal markers and nothing else outside them:
+STRICT RULES (apply to BOTH paragraphs):
+1. Each sample is ONE body paragraph that ${stanceLabel} the proposal.
+2. Structure = TOPIC SENTENCE + tight cause→effect chain ending at the FINAL RESULT.
+3. FORBIDDEN: NO "Dear Editor", NO greeting, NO introduction, NO rebuttal, NO counter-argument, NO conclusion, NO "Firstly/Secondly", NO "In conclusion", NO multiple ideas. ONE key idea, ONE chain.
+4. Lv 5** must use noticeably more sophisticated vocabulary and sentence variety than Lv 3.
+5. Each sample is 110–170 words.
+
+ALSO produce a vocabulary glossary for EACH sample listing the C1 and C2 advanced words used in that sample, each with a short 繁體中文 translation.
+
+OUTPUT FORMAT — exactly these labelled blocks, no JSON, no markdown:
 ===LV3===
-(paragraph ~80 words, simple vocabulary, 2–3 step logic, one example, minor grammar errors typical of a HK student, mechanical transitions such as "The first reason is...", "In conclusion...")
+<Lv 3 body paragraph>
+
+===LV3_VOCAB===
+- word :: 繁體中文 translation
+- word :: 繁體中文 translation
+...
+
 ===LV5===
-(paragraph ~150 words, sophisticated vocabulary — naturally include words like "exacerbate", "inherently", "detrimental" where they fit, 4–5 step deduction chain, one counter-argument with a [...]`;
+<Lv 5** body paragraph>
+
+===LV5_VOCAB===
+- word :: 繁體中文 translation
+- word :: 繁體中文 translation
+...`;
 
   const user = `Cause: ${cause}
 Stance: ${stance}
 Final Result: ${final_result}
 Student's logical chain (use as scaffold, improve as needed): ${chainText}
 
-Write both paragraphs now.`;
+Write both body paragraphs and their vocab glossaries now.`;
 
-  const raw = await runAI(env, system, user, 600);
+  const raw = await runAI(env, system, user, 1400);
 
-  const lv3 = pickBetween(raw, "===LV3===", "===LV5===") || "";
-  const lv5 = pickAfter(raw, "===LV5===") || "";
+  const lv3      = pickBetween(raw, "===LV3===",      "===LV3_VOCAB===") || pickBetween(raw, "===LV3===", "===LV5===") || "";
+  const lv3Vocab = pickBetween(raw, "===LV3_VOCAB===", "===LV5===") || "";
+  const lv5      = pickBetween(raw, "===LV5===",      "===LV5_VOCAB===") || pickAfter(raw, "===LV5===") || "";
+  const lv5Vocab = pickAfter(raw,  "===LV5_VOCAB===") || "";
 
   return {
     lv3: lv3.trim() || "(Lv3 sample could not be parsed.)\n\n" + raw,
     lv5: lv5.trim() || "(Lv5** sample could not be parsed.)",
+    lv3_vocab: parseVocabLines(lv3Vocab),
+    lv5_vocab: parseVocabLines(lv5Vocab),
   };
+}
+
+function parseVocabLines(text) {
+  if (!text) return [];
+  return text.split(/\r?\n/).map((l) => l.trim())
+    .filter((l) => l.startsWith("-") || l.startsWith("•"))
+    .map((l) => l.replace(/^[-•]\s*/, ""))
+    .map((l) => {
+      const parts = l.split(/\s*::\s*|\s*—\s*|\s*-\s+(?=[一-鿿])/);
+      return { word: (parts[0] || "").trim(), translation: (parts[1] || "").trim() };
+    })
+    .filter((v) => v.word);
 }
 
 function pickBetween(text, start, end) {
