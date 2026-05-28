@@ -65,9 +65,10 @@ const state = {
   stance: null,
   question: null,
   chain: [],
-  hints: [],          // hints shown so far (parallel to chain)
-  plannedHints: [],   // cached coherent chain from /plan-chain (length = CHAIN_LENGTH-2)
-  planInFlight: null, // in-flight /plan-chain promise (race-condition guard)
+  hints: [],            // hints shown so far (parallel to chain)
+  plannedHints: [],     // cached coherent chain from /plan-chain
+  topicSentence: null,  // the precise Step II first-box topic sentence
+  planInFlight: null,   // in-flight /plan-chain promise (race-condition guard)
   feedback: null,
   samples: null,
 };
@@ -157,6 +158,9 @@ $("#btn-generate-question").addEventListener("click", async () => {
 $("#btn-to-step-2").addEventListener("click", () => {
   buildChainUI();
   gotoStep(2);
+  // Fire the plan call immediately so the topic sentence (Step II's first
+  // box) is generated up-front instead of lazily on the first Hint click.
+  ensurePlannedChain();
 });
 
 /* ------------------------------------------------------------------
@@ -170,10 +174,12 @@ function buildChainUI() {
   const total = CHAIN_LENGTH;
   state.chain = new Array(total).fill("");
   state.hints = new Array(total).fill(null);
-  state.plannedHints = [];   // fresh question → re-plan on next hint click
-  state.chain[0] = q.cause;
+  state.plannedHints = [];     // fresh question → re-plan
+  state.topicSentence = null;  // ditto
+  state.planInFlight = null;   // drop any stale in-flight plan
+  // chain[0] will be filled by ensurePlannedChain (topic sentence).
+  // Until then we display a placeholder.
   state.chain[total - 1] = q.final_result;
-  state.planInFlight = null;  // fresh question → drop any stale in-flight plan
 
   for (let i = 0; i < total; i++) {
     const box = document.createElement("div");
@@ -185,13 +191,15 @@ function buildChainUI() {
     header.className = "box-header";
     const numEl = document.createElement("span");
     numEl.className = "box-num";
-    numEl.textContent = `Step ${i + 1}` + (i === 0 ? " · Given Cause" : i === total - 1 ? " · Final Result" : "");
+    numEl.textContent = `Step ${i + 1}` + (i === 0 ? " · Topic Sentence" : i === total - 1 ? " · Final Result" : "");
     header.appendChild(numEl);
     box.appendChild(header);
 
     if (i === 0) {
       const text = document.createElement("div");
-      text.className = "given-text"; text.textContent = q.cause;
+      text.className = "given-text topic-sentence-text";
+      text.id = "topic-sentence-text";
+      text.textContent = "Generating topic sentence… 正在生成主題句…";
       box.appendChild(text);
     } else if (i === total - 1) {
       const text = document.createElement("div");
@@ -222,31 +230,45 @@ function buildChainUI() {
   }
 }
 
+/* ensurePlannedChain — fetch topic sentence + hints in ONE AI call and
+   cache them. Called automatically on Step II entry, and again (no-op)
+   on each Hint click as a safety net. Race-guarded. */
+function ensurePlannedChain() {
+  if (state.topicSentence && state.plannedHints && state.plannedHints.length > 0) {
+    return Promise.resolve();
+  }
+  if (state.planInFlight) return state.planInFlight;
+
+  state.planInFlight = api("/plan-chain", {
+    cause: state.question.cause,
+    final_result: state.question.final_result,
+    total_steps: CHAIN_LENGTH,
+  }).then((res) => {
+    state.plannedHints = Array.isArray(res.hints) ? res.hints : [];
+    state.topicSentence = (res && res.topic_sentence) ? res.topic_sentence : state.question.cause;
+    state.chain[0] = state.topicSentence;
+    paintTopicSentence(state.topicSentence);
+    state.planInFlight = null;
+  }).catch(() => {
+    // Fallback: use the raw question cause so the user can still proceed.
+    state.topicSentence = state.question.cause;
+    state.chain[0] = state.topicSentence;
+    paintTopicSentence(state.topicSentence);
+    state.planInFlight = null;
+  });
+  return state.planInFlight;
+}
+
+function paintTopicSentence(text) {
+  const el = document.getElementById("topic-sentence-text");
+  if (el) el.textContent = text;
+}
+
 async function requestHint(idx, btn, bubble) {
   btn.disabled = true; btn.textContent = "Loading…";
   try {
-    // FIRST hint click for this question: plan the ENTIRE chain in one AI
-    // call so every step is part of one coherent causal bridge. Then cache.
-    // Race-guard: if a plan call is already in flight, await the same promise
-    // so two quick taps don't burn two AI calls.
-    if (!state.plannedHints || state.plannedHints.length === 0) {
-      if (!state.planInFlight) {
-        state.planInFlight = api("/plan-chain", {
-          cause: state.question.cause,
-          final_result: state.question.final_result,
-          total_steps: CHAIN_LENGTH,
-        }).then((res) => {
-          state.plannedHints = Array.isArray(res.hints) ? res.hints : [];
-          state.planInFlight = null;
-          return state.plannedHints;
-        }).catch(() => {
-          state.plannedHints = [];
-          state.planInFlight = null;
-          return [];
-        });
-      }
-      await state.planInFlight;
-    }
+    // Wait for (or trigger) the shared plan call.
+    await ensurePlannedChain();
 
     // hints[0] = step 2, hints[1] = step 3, hints[2] = step 4 (for CHAIN_LENGTH=5)
     let hint = state.plannedHints[idx - 1];
@@ -449,7 +471,7 @@ document.addEventListener("click", (e) => {
 /* ---------- Restart ---------- */
 $("#btn-restart").addEventListener("click", () => {
   state.question = null;
-  state.chain = []; state.hints = []; state.plannedHints = []; state.planInFlight = null;
+  state.chain = []; state.hints = []; state.plannedHints = []; state.topicSentence = null; state.planInFlight = null;
   state.feedback = null; state.samples = null;
   $("#question-output").classList.add("hidden");
   $$("#axis-group .chip, #stance-group .chip").forEach((c) => c.classList.remove("selected"));
