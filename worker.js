@@ -14,9 +14,9 @@
  * different subdomain.  Tighten ALLOWED_ORIGIN in production.
  */
 
-const MODEL = "@cf/meta/llama-3-8b-instruct";
+const MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 // Fallback if the above isn't available on your account:
-// const MODEL = "@cf/mistral/mistral-7b-instruct-v0.1";
+// const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 const ALLOWED_ORIGIN = "*"; // tighten in production
 const CORS_HEADERS = {
@@ -134,34 +134,60 @@ async function generateQuestion(env, { axis, stance }) {
   const seeds = SEED_HINTS[axis] || "";
   const stanceText = stance === "pro" ? "positive (PRO)" : "negative (CON)";
 
+  // Switched from JSON output to labelled lines — the JSON path was failing
+  // intermittently (the model emits `{\n"cause": ...}`, JSON.parse fails on
+  // some quoting/comma quirk, and the old fallback grabbed `raw.split("\n")[0]`
+  // which is just "{"). Labelled output + an anti-junk filter kills that bug.
   const system = `You are a DSE English exam question generator for Hong Kong secondary students. Generate a realistic one-sided argumentative writing prompt in the axis of ${axis}.
 
-Return JSON with EXACTLY these fields and nothing else:
-{
-  "cause": "A 1-2 sentence description of the given cause or phenomenon",
-  "task": "A one-sentence instruction telling the student what to argue",
-  "final_result": "A 3-5 word label for the expected final outcome (e.g. Academic Performance, Social Harmony, Economic Vitality)",
-  "stance": "${stance}"
-}
+The cause should reflect real Hong Kong social issues. The stance is ${stanceText}. Be specific, not generic.
 
-The cause should reflect real Hong Kong social issues. The stance is ${stanceText}. Be specific, not generic. Output JSON only — no prose, no code fence.`;
+OUTPUT FORMAT — exactly these three labelled lines, nothing else, no JSON, no markdown, no code fence, no quotation marks around the values:
+CAUSE: <a 1–2 sentence description of the given cause or phenomenon>
+TASK: <a one-sentence instruction telling the student what to argue>
+FINAL_RESULT: <a 2–5 word noun phrase naming the expected final outcome, e.g. Academic Performance, Social Harmony, Economic Vitality>`;
 
   const user = `Generate one question. Use any of these example causes as inspiration (vary them — do not copy verbatim): ${seeds}.`;
 
-  const raw = await runAI(env, system, user, 400);
-  const parsed = extractJSON(raw);
+  const raw = await runAI(env, system, user, 500);
 
-  if (!parsed || !parsed.cause || !parsed.task || !parsed.final_result) {
-    // Fallback: best-effort plain text shape so the UI does not break.
-    return {
-      cause: parsed?.cause || raw.split("\n")[0] || "A new policy is being considered in Hong Kong.",
-      task: parsed?.task || `Write a one-sided argument explaining why this leads to ${stance === "pro" ? "positive" : "negative"} outcomes.`,
-      final_result: parsed?.final_result || (axis.includes("Education") ? "Academic Performance" : "Social Harmony"),
-      stance,
-    };
+  // Primary parser: labelled lines (handles both `LABEL:` and `"LABEL":` forms).
+  const pickLineLocal = (label) => {
+    const re = new RegExp(`^\\s*"?${label}"?\\s*[:：]\\s*(.+?)\\s*$`, "im");
+    const m = raw.match(re);
+    if (!m) return "";
+    return m[1].trim().replace(/^["「『]+|["」』,]+$/g, "").trim();
+  };
+
+  let causeOut = pickLineLocal("CAUSE");
+  let taskOut  = pickLineLocal("TASK");
+  let finalOut = pickLineLocal("FINAL_RESULT") || pickLineLocal("FINAL RESULT") || pickLineLocal("final_result");
+
+  // Backward-compat: if the model ignored the labelled instruction and
+  // returned JSON, recover from that too.
+  if (!causeOut || !taskOut || !finalOut) {
+    const parsed = extractJSON(raw);
+    if (parsed) {
+      if (!causeOut && parsed.cause)        causeOut = String(parsed.cause);
+      if (!taskOut  && parsed.task)         taskOut  = String(parsed.task);
+      if (!finalOut && parsed.final_result) finalOut = String(parsed.final_result);
+    }
   }
-  parsed.stance = stance;
-  return parsed;
+
+  // Anti-junk filter — never let "{", "}", or other structural fragments
+  // through to the UI. This is the specific guard that kills "Cause = {".
+  const isJunk = (s) => !s || /^[{}\[\]",:;\s`']+$/.test(s) || s.length < 5;
+  if (isJunk(causeOut)) {
+    causeOut = `A new proposal in the area of ${axis} is currently being discussed in Hong Kong.`;
+  }
+  if (isJunk(taskOut)) {
+    taskOut = `Write a one-sided argument explaining why this leads to ${stance === "pro" ? "positive" : "negative"} outcomes.`;
+  }
+  if (isJunk(finalOut)) {
+    finalOut = axis.includes("Education") ? "Academic Performance" : "Social Harmony";
+  }
+
+  return { cause: causeOut, task: taskOut, final_result: finalOut, stance };
 }
 
 /* ------------------------------------------------------------------
@@ -209,7 +235,7 @@ Each hint is ONE complete short sentence (約 16–26 個字, MUST end with 「�
 CRITICAL RULES for the hint chain:
 1. The full chain reads: TOPIC_SENTENCE → HINT_1 → HINT_2 → … → FINAL_RESULT.
 2. Each hint MUST add a DISTINCT NEW causal link. It must answer "and therefore what?" of the PREVIOUS step — never restate it.
-3. NO two hints may express the same idea even paraphrased. If HINT_1 says "students save money", HINT_2 must NOT say "less financial burden" — pick a DIFFERENT downstream consequence (e.g., "a[...]
+3. NO two hints may express the same idea even paraphrased. If HINT_1 says "students save money", HINT_2 must NOT say "less financial burden" — pick a DIFFERENT downstream consequence (e.g., "attendance becomes more regular", "dropout risk falls", "more energy for class").
 4. Before writing, mentally check every adjacent pair is a tight cause→effect with no obvious missing intermediate.
 5. Use ordinary modern Hong Kong 繁體中文.
 
@@ -285,7 +311,7 @@ async function getHint(env, { cause, final_result, step_number, total_steps, pre
 
 Output ONE complete short sentence in Traditional Chinese (繁體中文), 16–26 個字, ending with 「。」. Do NOT use English. Do NOT use quotation marks. Output ONLY the sentence.
 
-CRITICAL: the hint must be a NEW causal link that does NOT repeat any earlier step shown to you. It must answer "and therefore what?" of the previous step — not restate it. Use a fresh conseque[...]`;
+CRITICAL: the hint must be a NEW causal link that does NOT repeat any earlier step shown to you. It must answer "and therefore what?" of the previous step — not restate it. Use a fresh consequence (different verb, different noun) so each step adds something new to the chain.`;
 
   const user = `背景因 (CAUSE)：${cause}
 最終果 (FINAL_RESULT)：${final_result}
@@ -299,7 +325,6 @@ ${priorBlock}
   // Bump max_tokens so a full 繁體中文 sentence isn't cut mid-character.
   let raw = await runAI(env, system, user, 220);
   let hint = raw.split(/\r?\n/)[0].trim().replace(/^["「『]+|["」』]+$/g, "");
-  // Ensure sentence-final punctuation; never leave a mid-character cut.
   const SENTENCE_END = /[。！？!?.]$/;
   if (hint && !SENTENCE_END.test(hint)) {
     hint = hint.replace(/[，、,；;：:]?\s*[一-鿿]{0,2}$/, "").trim();
@@ -324,9 +349,9 @@ async function checkLogic(env, { cause, final_result, stance, chain, hints }) {
 
   const system = `You are a DSE English writing examiner. A student has written a logical deduction chain for a one-sided argumentative essay.
 
-The student's chain has ${chain.length} steps. Step 1 is the GIVEN topic sentence and the LAST step is the GIVEN final result — both supplied by the platform. Do NOT mark those wrong; only the [...]
+The student's chain has ${chain.length} steps. Step 1 is the GIVEN topic sentence and the LAST step is the GIVEN final result — both supplied by the platform. Do NOT mark those wrong; only the middle steps.
 
-Evaluate in EXACTLY four labelled sections, in this order. Use plain text (no Markdown, no asterisks). Refer to steps as "Step 1", "Step 2" — NEVER use [1] or [2]. Use simple English a secondar[...]
+Evaluate in EXACTLY four labelled sections, in this order. Use plain text (no Markdown, no asterisks). Refer to steps as "Step 1", "Step 2" — NEVER use [1] or [2]. Use simple English a secondary student can understand.
 
 LOGIC:
 For EVERY adjacent pair (Step N → Step N+1) ask: "Does Step N+1 follow tightly from Step N, or is there an obvious INTERMEDIATE cause missing between them?"
@@ -335,7 +360,7 @@ For each gap you find, you MUST:
   (b) quote the jump in plain words
   (c) state the MISSING BRIDGING IDEA in ONE sentence
 Worked example of a missing-link diagnosis:
-  "Step 3 ('students reduce their transportation costs') jumps too quickly to Step 4 ('students focus more on their studies'). The missing link is: lower transport costs reduce the financial pres[...]
+  "Step 3 ('students reduce their transportation costs') jumps too quickly to Step 4 ('students focus more on their studies'). The missing link is: lower transport costs reduce the financial pressure that pushes low-income students to drop out, so attendance stabilises — and only THEN can they focus."
 If a student's wording is a reasonable translation of the Cantonese hint they were shown, treat that step as LOGICALLY VALID even if the English is rough.
 Keep this section to ≤ 7 short sentences.
 
@@ -350,7 +375,7 @@ LANGUAGE:
 List specific grammar errors with corrections in the form "❌ wrong → ✅ right". Suggest better vocabulary. ≤ 4 lines. If nothing major, say "No major language issues."
 
 TOPIC:
-One polished English topic sentence using the formula: [Cause] → [mechanism] → [Final Result]. Example shape: "By [cause], students are able to [mechanism], which ultimately [Final Result]."`[...]`;
+One polished English topic sentence using the formula: [Cause] → [mechanism] → [Final Result]. Example shape: "By [cause], students are able to [mechanism], which ultimately [Final Result]."`;
 
   const user = `GIVEN TOPIC SENTENCE (Step 1, fixed): ${givenStep1}
 GIVEN FINAL RESULT (last step, fixed): ${final_result}
@@ -370,7 +395,6 @@ Evaluate now. Be ruthless about missing intermediate links — that is the WHOLE
   const language = pickSection(raw, "LANGUAGE");
   const topic = pickSection(raw, "TOPIC");
 
-  // Parse the numbered CORRECTED_CHAIN block into an array.
   let corrected_chain = parseNumberedList(correctedRaw);
   if (!corrected_chain.length) {
     corrected_chain = [givenStep1, "(no bridging steps inferred — try again)", final_result];
@@ -431,7 +455,7 @@ async function generateSamples(env, { cause, final_result, stance, chain }) {
 STRICT RULES (apply to BOTH paragraphs):
 1. Each sample is ONE body paragraph that ${stanceLabel} the proposal.
 2. Structure = TOPIC SENTENCE + tight cause→effect chain ending at the FINAL RESULT.
-3. FORBIDDEN: NO "Dear Editor", NO greeting, NO introduction, NO rebuttal, NO counter-argument, NO conclusion, NO "Firstly/Secondly", NO "In conclusion", NO multiple ideas. ONE key idea, ONE chai[...]
+3. FORBIDDEN: NO "Dear Editor", NO greeting, NO introduction, NO rebuttal, NO counter-argument, NO conclusion, NO "Firstly/Secondly", NO "In conclusion", NO multiple ideas. ONE key idea, ONE chain.
 4. Lv 5** must use noticeably more sophisticated vocabulary and sentence variety than Lv 3.
 5. Each sample is 110–170 words.
 
